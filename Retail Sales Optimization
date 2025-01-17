@@ -1,0 +1,148 @@
+# Import required libraries
+import pandas as pd
+import numpy as np
+import re
+from gensim.models import Word2Vec
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from tensorflow.keras.models import Model, Sequential
+from tensorflow.keras.layers import Input, Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+import matplotlib.pyplot as plt
+
+# 1. Load and Explore the Dataset
+# Assuming the dataset contains 'Store_ID', 'Date', 'Sales', 'Customer_Count', 'Season', 'Category'
+# Replace 'path_to_dataset.csv' with the actual file path
+data = pd.read_csv('path_to_dataset.csv')
+print(data.head())
+print(data.info())
+
+# 2. Preprocess the Data
+# Convert 'Date' to datetime and extract seasonal trends
+data['Date'] = pd.to_datetime(data['Date'])
+data['Year'] = data['Date'].dt.year
+data['Month'] = data['Date'].dt.month
+data['Day'] = data['Date'].dt.day
+data['Weekday'] = data['Date'].dt.weekday
+
+# Encode categorical variables
+label_encoders = {}
+for col in ['Season', 'Category']:
+    le = LabelEncoder()
+    data[col] = le.fit_transform(data[col])
+    label_encoders[col] = le
+
+# Normalize numerical features
+scaler = MinMaxScaler()
+data[['Sales', 'Customer_Count']] = scaler.fit_transform(data[['Sales', 'Customer_Count']])
+
+# 3. Create Store Embeddings using Word2Vec
+# Generate sequences of stores based on temporal proximity
+store_sequences = data.groupby('Date')['Store_ID'].apply(list).tolist()
+
+# Train a Word2Vec model
+w2v_model = Word2Vec(sentences=store_sequences, vector_size=16, window=3, min_count=1, workers=4, sg=1)
+store_embeddings = {store: w2v_model.wv[store] for store in w2v_model.wv.index_to_key}
+
+# Map embeddings back to the dataset
+data['Store_Embedding'] = data['Store_ID'].apply(lambda x: store_embeddings[x])
+
+# Expand embeddings into separate columns
+embedding_df = pd.DataFrame(data['Store_Embedding'].tolist(), columns=[f'Embed_{i}' for i in range(16)])
+data = pd.concat([data, embedding_df], axis=1).drop(columns=['Store_Embedding'])
+
+# 4. Build an Autoencoder for Feature Extraction
+# Prepare input features and target
+X = data.drop(columns=['Sales', 'Date', 'Store_ID'])
+y = data['Sales']
+
+# Split the data into training and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Define the autoencoder
+input_dim = X_train.shape[1]
+encoding_dim = 8
+
+input_layer = Input(shape=(input_dim,))
+encoded = Dense(encoding_dim, activation='relu')(input_layer)
+decoded = Dense(input_dim, activation='sigmoid')(encoded)
+
+autoencoder = Model(inputs=input_layer, outputs=decoded)
+encoder = Model(inputs=input_layer, outputs=encoded)
+
+autoencoder.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
+
+# Train the autoencoder
+history = autoencoder.fit(X_train, X_train, epochs=50, batch_size=32, validation_data=(X_test, X_test), verbose=1)
+
+# Extract encoded features
+X_train_encoded = encoder.predict(X_train)
+X_test_encoded = encoder.predict(X_test)
+
+# 5. Train a Machine Learning Model for Sales Prediction
+# Define the sales forecasting model
+model = Sequential([
+    Dense(64, activation='relu', input_shape=(encoding_dim,)),
+    Dropout(0.3),
+    Dense(32, activation='relu'),
+    Dropout(0.2),
+    Dense(1, activation='linear')
+])
+
+model.compile(optimizer=Adam(learning_rate=0.001), loss='mse', metrics=['mae'])
+
+# Train the model
+history = model.fit(X_train_encoded, y_train, epochs=50, batch_size=32, validation_data=(X_test_encoded, y_test), verbose=1)
+
+# 6. Evaluate the Model
+# Predict on the test set
+y_pred = model.predict(X_test_encoded)
+
+# Calculate performance metrics
+mae = mean_absolute_error(y_test, y_pred)
+mse = mean_squared_error(y_test, y_pred)
+rmse = np.sqrt(mse)
+
+print(f"Mean Absolute Error: {mae:.4f}")
+print(f"Mean Squared Error: {mse:.4f}")
+print(f"Root Mean Squared Error: {rmse:.4f}")
+
+# 7. Plot Training History
+def plot_training_history(history):
+    plt.figure(figsize=(12, 4))
+
+    # Loss plot
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history['loss'], label='Train Loss')
+    plt.plot(history.history['val_loss'], label='Validation Loss')
+    plt.title('Loss Over Epochs')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+
+    # MAE plot
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history['mae'], label='Train MAE')
+    plt.plot(history.history['val_mae'], label='Validation MAE')
+    plt.title('MAE Over Epochs')
+    plt.xlabel('Epochs')
+    plt.ylabel('MAE')
+    plt.legend()
+
+    plt.show()
+
+plot_training_history(history)
+
+# 8. Real-Time Prediction
+def predict_sales(input_features, model, encoder):
+    # Encode input features using the trained encoder
+    encoded_features = encoder.predict(np.array(input_features).reshape(1, -1))
+    # Predict sales
+    sales_prediction = model.predict(encoded_features)
+    return sales_prediction[0][0]
+
+# Example input for prediction
+example_input = X_test.iloc[0].tolist()
+predicted_sales = predict_sales(example_input, model, encoder)
+print(f"Predicted Sales: {predicted_sales:.4f}")
