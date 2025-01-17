@@ -1,0 +1,85 @@
+# Import necessary libraries
+import pandas as pd
+import numpy as np
+import re
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+import nltk
+
+# Download necessary NLTK data
+nltk.download('stopwords')
+nltk.download('wordnet')
+
+# 1. Load and Explore the Dataset
+# Assuming a dataset with 'review' and 'sentiment' columns
+# Replace 'path_to_dataset.csv' with the actual dataset file path
+df = pd.read_csv('path_to_dataset.csv')
+
+# Display basic information about the dataset
+print(df.head())
+print(f"Dataset shape: {df.shape}")
+print(f"Class distribution:\n{df['sentiment'].value_counts()}")
+
+# 2. Data Cleaning and Preprocessing
+lemmatizer = WordNetLemmatizer()
+stop_words = set(stopwords.words('english'))
+
+def preprocess_text(text):
+    # Lowercase the text
+    text = text.lower()
+    # Remove special characters and numbers
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+    # Tokenize the text
+    words = text.split()
+    # Remove stopwords and lemmatize words
+    words = [lemmatizer.lemmatize(word) for word in words if word not in stop_words]
+    return ' '.join(words)
+
+# Apply preprocessing to the 'review' column
+df['cleaned_review'] = df['review'].apply(preprocess_text)
+
+# 3. Split the Dataset into Training and Test Sets
+X = df['cleaned_review']
+y = df['sentiment']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+# 4. Feature Extraction using TF-IDF
+tfidf_vectorizer = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
+X_train_tfidf = tfidf_vectorizer.fit_transform(X_train)
+X_test_tfidf = tfidf_vectorizer.transform(X_test)
+
+# 5. Train a Sentiment Classification Model
+model = MultinomialNB()
+model.fit(X_train_tfidf, y_train)
+
+# 6. Evaluate the Model
+y_pred = model.predict(X_test_tfidf)
+
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred))
+
+print("\nAccuracy Score:")
+print(f"{accuracy_score(y_test, y_pred) * 100:.2f}%")
+
+print("\nConfusion Matrix:")
+print(confusion_matrix(y_test, y_pred))
+
+# 7. Test the Model on New Reviews
+def predict_sentiment(review):
+    # Preprocess the review
+    review_cleaned = preprocess_text(review)
+    # Transform the review using the TF-IDF vectorizer
+    review_vectorized = tfidf_vectorizer.transform([review_cleaned])
+    # Predict the sentiment
+    prediction = model.predict(review_vectorized)
+    return prediction[0]
+
+# Test example
+test_review = "The movie was absolutely fantastic with brilliant performances!"
+print(f"\nReview: '{test_review}'")
+print(f"Predicted Sentiment: {predict_sentiment(test_review)}")
